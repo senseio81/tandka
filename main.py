@@ -452,5 +452,5 @@ def webhook():
 
 if __name__ == '__main__':
     bot.remove_webhook()
-    bot.set_webhook(url=f"https://{os.environ['RAILWAY_STATIC_URL']}/webhook")
+    bot.set_webhook(url=f"https://{os.environ['RAILWAY_PUBLIC_DOMAIN']}/webhook")
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
