@@ -45,7 +45,7 @@ def get_user_id_by_username(username):
 emojis = ['🐶', '🐱', '🦊', '🐼', '🐨', '🦁']
 user_captcha = {}
 muted_users = {}
-chat_id = -1003534299392
+chat_id = -5168403870
 msk_tz = pytz.timezone('Europe/Moscow')
 
 def parse_time_and_reason(text):
