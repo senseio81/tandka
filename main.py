@@ -1,3 +1,42 @@
+# ==== ПРИНУДИТЕЛЬНАЯ УСТАНОВКА НУЖНОЙ ВЕРСИИ ====
+import subprocess
+import sys
+
+print("🚀 Устанавливаю python-telegram-bot версии 13.15...")
+subprocess.check_call([sys.executable, "-m", "pip", "install", "--force-reinstall", "python-telegram-bot==13.15"])
+
+# Теперь импортируем и проверяем версию
+import telegram
+print(f"✅ Установлена версия: {telegram.__version__}")
+
+# Если версия не 13.15 - ошибка
+if telegram.__version__ != "13.15":
+    raise Exception(f"❌ Ошибка: установлена версия {telegram.__version__}, нужна 13.15")
+# =============================================
+
+# Теперь импортируем всё остальное
+# ==== ПРИНУДИТЕЛЬНАЯ УСТАНОВКА НУЖНОЙ ВЕРСИИ ====
+import subprocess
+import sys
+
+print("🚀 Устанавливаю python-telegram-bot версии 13.15...")
+subprocess.check_call([sys.executable, "-m", "pip", "install", "--force-reinstall", "python-telegram-bot==13.15"])
+
+# Теперь импортируем и проверяем версию
+import telegram
+print(f"✅ Установлена версия: {telegram.__version__}")
+
+# Если версия не 13.15 - ошибка
+if telegram.__version__ != "13.15":
+    raise Exception(f"❌ Ошибка: установлена версия {telegram.__version__}, нужна 13.15")
+# =============================================
+
+# Теперь импортируем всё остальное
+
+# ... дальше твой остальной код
+
+# ... дальше твой остальной код
+
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, MessageHandler, Filters, CallbackContext
@@ -9,9 +48,6 @@ import random
 import string
 import time
 from datetime import datetime
-
-import telegram
-print(f"Версия telegram: {telegram.__version__}")
 
 # ========== НАСТРОЙКА ==========
 BOT_TOKEN = os.environ['BOT_TOKEN']
