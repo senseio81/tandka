@@ -1,19 +1,26 @@
 # ==== ПРИНУДИТЕЛЬНАЯ УСТАНОВКА ====
+# ==== ЖЕСТКАЯ ПРИНУДИТЕЛЬНАЯ УСТАНОВКА ====
 import subprocess
 import sys
 import os
 
-print("🚀 Устанавливаю правильные версии пакетов...")
+print("🚀 Устанавливаю пакеты...")
 
-# Устанавливаем правильные версии
-subprocess.check_call([sys.executable, "-m", "pip", "install", "setuptools==65.0.0"])
-subprocess.check_call([sys.executable, "-m", "pip", "install", "--force-reinstall", "python-telegram-bot==13.15"])
+# 1. Сносим всё нахуй
+subprocess.check_call([sys.executable, "-m", "pip", "uninstall", "-y", "setuptools", "python-telegram-bot", "apscheduler"])
+
+# 2. Ставим setuptools СТАРОЙ версии (именно она дает pkg_resources)
+subprocess.check_call([sys.executable, "-m", "pip", "install", "setuptools==59.5.0"])
+
+# 3. Теперь ставим всё остальное
+subprocess.check_call([sys.executable, "-m", "pip", "install", "python-telegram-bot==13.15"])
 subprocess.check_call([sys.executable, "-m", "pip", "install", "APScheduler==3.6.3"])
 subprocess.check_call([sys.executable, "-m", "pip", "install", "psycopg2-binary==2.9.9"])
 subprocess.check_call([sys.executable, "-m", "pip", "install", "requests==2.31.0"])
 subprocess.check_call([sys.executable, "-m", "pip", "install", "Flask==2.3.3"])
 
 print("✅ Пакеты установлены")
+# ===========================================
 # ===================================
 
 # Теперь импортируем
