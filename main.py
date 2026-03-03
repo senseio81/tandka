@@ -2,20 +2,16 @@
 import subprocess
 import sys
 import os
-#лы
+
 print("🚀 Устанавливаю правильные версии пакетов...")
 
-# Удаляем конфликтующие пакеты если есть
-subprocess.check_call([sys.executable, "-m", "pip", "uninstall", "-y", "apscheduler", "setuptools"])
-
-# Ставим старую версию setuptools (нужна для pkg_resources)
+# Устанавливаем правильные версии
 subprocess.check_call([sys.executable, "-m", "pip", "install", "setuptools==65.0.0"])
-
-# Ставим telegram-bot 13.15
 subprocess.check_call([sys.executable, "-m", "pip", "install", "--force-reinstall", "python-telegram-bot==13.15"])
-
-# Блокируем установку apscheduler
-subprocess.check_call([sys.executable, "-m", "pip", "install", "apscheduler==3.9.0"])
+subprocess.check_call([sys.executable, "-m", "pip", "install", "APScheduler==3.6.3"])
+subprocess.check_call([sys.executable, "-m", "pip", "install", "psycopg2-binary==2.9.9"])
+subprocess.check_call([sys.executable, "-m", "pip", "install", "requests==2.31.0"])
+subprocess.check_call([sys.executable, "-m", "pip", "install", "Flask==2.3.3"])
 
 print("✅ Пакеты установлены")
 # ===================================
