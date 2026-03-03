@@ -1,41 +1,26 @@
-# ==== ПРИНУДИТЕЛЬНАЯ УСТАНОВКА НУЖНОЙ ВЕРСИИ ====
+# ==== ПРИНУДИТЕЛЬНАЯ УСТАНОВКА ====
 import subprocess
 import sys
 
-print("🚀 Устанавливаю python-telegram-bot версии 13.15...")
+print("🚀 Устанавливаю нужные пакеты...")
+
+# Сначала setuptools (нужен для pkg_resources)
+subprocess.check_call([sys.executable, "-m", "pip", "install", "setuptools"])
+
+# Потом telegram-bot
 subprocess.check_call([sys.executable, "-m", "pip", "install", "--force-reinstall", "python-telegram-bot==13.15"])
 
-# Теперь импортируем и проверяем версию
+# Теперь импортируем и проверяем
 import telegram
 print(f"✅ Установлена версия: {telegram.__version__}")
 
-# Если версия не 13.15 - ошибка
 if telegram.__version__ != "13.15":
-    raise Exception(f"❌ Ошибка: установлена версия {telegram.__version__}, нужна 13.15")
-# =============================================
+    raise Exception(f"❌ Ошибка версии")
+# ===================================
 
-# Теперь импортируем всё остальное
-# ==== ПРИНУДИТЕЛЬНАЯ УСТАНОВКА НУЖНОЙ ВЕРСИИ ====
-import subprocess
-import sys
+# Теперь импортируем всё остальн
 
-print("🚀 Устанавливаю python-telegram-bot версии 13.15...")
-subprocess.check_call([sys.executable, "-m", "pip", "install", "--force-reinstall", "python-telegram-bot==13.15"])
-
-# Теперь импортируем и проверяем версию
-import telegram
-print(f"✅ Установлена версия: {telegram.__version__}")
-
-# Если версия не 13.15 - ошибка
-if telegram.__version__ != "13.15":
-    raise Exception(f"❌ Ошибка: установлена версия {telegram.__version__}, нужна 13.15")
-# =============================================
-
-# Теперь импортируем всё остальное
-
-# ... дальше твой остальной код
-
-# ... дальше твой остальной код
+# ... остальной код
 
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
