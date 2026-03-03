@@ -1,4 +1,5 @@
 # ==== ПРИНУДИТЕЛЬНАЯ УСТАНОВКА ====
+# ==== ПРИНУДИТЕЛЬНАЯ УСТАНОВКА ====
 import subprocess
 import sys
 import os
@@ -407,8 +408,7 @@ def show_admin_panel(query, user_id):
             InlineKeyboardButton("Логи", callback_data='admin_logs')
         ],
         [
-            InlineKeyboardButton("Баланс бота", callback_data='admin_balance'),
-            InlineKeyboardButton("Пользователи", callback_data='admin_users')
+            InlineKeyboardButton("Баланс бота", callback_data='admin_balance')
         ],
         [InlineKeyboardButton("Назад", callback_data='back_to_menu')]
     ]
@@ -540,95 +540,6 @@ def show_admin_balance(query):
         reply_markup=reply_markup,
         parse_mode='HTML'
     )
-
-def show_admin_users(query):
-    conn = get_db_connection()
-    c = conn.cursor()
-    
-    c.execute("SELECT user_id, username, paid_status, balance, referral_count, join_date FROM users ORDER BY user_id DESC LIMIT 10")
-    last_users = c.fetchall()
-    
-    c.execute("SELECT COUNT(*) FROM users")
-    total_users = c.fetchone()[0]
-    
-    conn.close()
-    
-    if not last_users:
-        text = "<blockquote>📭 Нет пользователей</blockquote>"
-        keyboard = [[InlineKeyboardButton("Назад", callback_data='admin_panel')]]
-    else:
-        text = "<blockquote>👥 Последние 10 пользователей:\n\n"
-        for user in last_users:
-            status = "✅" if user[2] else "❌"
-            join_date = user[5].strftime("%Y-%m-%d") if user[5] else "неизвестно"
-            text += f"{status} ID: {user[0]} | @{user[1] or 'нет'}\n"
-            text += f"   Баланс: {user[3]} | Реф: {user[4]} | {join_date}\n\n"
-        text += f"Всего пользователей: {total_users}</blockquote>"
-        
-        keyboard = [
-            [InlineKeyboardButton("Все пользователи", callback_data='export_users')],
-            [InlineKeyboardButton("Назад", callback_data='admin_panel')]
-        ]
-    
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    try:
-        query.edit_message_text(
-            text,
-            reply_markup=reply_markup,
-            parse_mode='HTML'
-        )
-    except Exception as e:
-        logger.error(f"Ошибка в show_admin_users: {e}")
-        query.edit_message_text(
-            "❌ Ошибка загрузки списка пользователей",
-            reply_markup=reply_markup
-        )
-
-def export_all_users(query, context):
-    try:
-        conn = get_db_connection()
-        c = conn.cursor()
-        c.execute("SELECT user_id, username, paid_status, balance, referral_count, referrer_id, referral_code, join_date FROM users ORDER BY user_id")
-        users = c.fetchall()
-        conn.close()
-        
-        filename = f'users_export_{datetime.now().strftime("%Y%m%d_%H%M%S")}.txt'
-        
-        with open(filename, 'w', encoding='utf-8') as f:
-            f.write("=" * 80 + "\n")
-            f.write(f"ВСЕ ПОЛЬЗОВАТЕЛИ БОТА @{BOT_USERNAME}\n")
-            f.write(f"Дата выгрузки: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-            f.write(f"Всего пользователей: {len(users)}\n")
-            f.write("=" * 80 + "\n\n")
-            
-            for user in users:
-                user_id, username, paid_status, balance, referral_count, referrer_id, referral_code, join_date = user
-                
-                f.write(f"📱 ID: {user_id}\n")
-                f.write(f"👤 Username: @{username if username else 'нет'}\n")
-                f.write(f"✅ Статус: {'Оплатил' if paid_status else 'Не оплатил'}\n")
-                f.write(f"🏦 Баланс: {balance} USDT\n")
-                f.write(f"👥 Рефералов: {referral_count}\n")
-                f.write(f"🔗 Реф код: {referral_code if referral_code else 'нет'}\n")
-                f.write(f"👆 Пригласил: {referrer_id if referrer_id else 'нет'}\n")
-                f.write(f"📅 Дата регистрации: {join_date.strftime('%Y-%m-%d %H:%M:%S') if join_date else 'неизвестно'}\n")
-                f.write("-" * 40 + "\n")
-        
-        with open(filename, 'rb') as f:
-            context.bot.send_document(
-                chat_id=query.from_user.id,
-                document=f,
-                filename=filename,
-                caption=f"📊 Выгрузка всех пользователей ({len(users)} чел.)"
-            )
-        
-        os.remove(filename)
-        query.answer("✅ Файл отправлен")
-        
-    except Exception as e:
-        logger.error(f"Ошибка при экспорте пользователей: {e}")
-        query.answer(f"❌ Ошибка: {e}", show_alert=True)
 
 # ========== ПРОФИЛЬ ==========
 def show_profile(query, user_id):
@@ -901,10 +812,6 @@ def button_callback(update: Update, context: CallbackContext):
         send_logs(query, context, 'transactions')
     elif query.data == 'admin_balance':
         show_admin_balance(query)
-    elif query.data == 'admin_users':
-        show_admin_users(query)
-    elif query.data == 'export_users':
-        export_all_users(query, context)
     
     elif query.data == 'profile':
         show_profile(query, user_id)
