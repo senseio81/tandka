@@ -1,456 +1,923 @@
-import telebot
+import logging
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, MessageHandler, Filters, CallbackContext
+import psycopg2
+import psycopg2.extras
+import requests
 import os
 import random
-import re
-import psycopg2
-from psycopg2.extras import DictCursor
-from datetime import datetime, timedelta
-from threading import Timer
-import pytz
-from flask import Flask, request
+import string
+import time
+from datetime import datetime
 
-bot = telebot.TeleBot(os.environ['T'])
-admin_id = int(os.environ.get('ADMIN_ID', 0))
-DATABASE_URL = os.environ.get('DATABASE_URL')
+# ========== НАСТРОЙКА ==========
+BOT_TOKEN = os.environ['BOT_TOKEN']
+CRYPTOBOT_TOKEN = os.environ['CRYPTOBOT_TOKEN']  # Токен от @CryptoBot
+BOT_USERNAME = "Galaxy_MoneyBot"
+MIN_WITHDRAW = 8
+ADMIN_IDS = [8503054217]
+ADMIN_USERNAMES = ["siberia_1488"]
 
-conn = psycopg2.connect(DATABASE_URL, sslmode='require')
-cursor = conn.cursor(cursor_factory=DictCursor)
+# ========== ПОДКЛЮЧЕНИЕ К POSTGRESQL (RAILWAY) ==========
+DATABASE_URL = os.environ['DATABASE_URL']  # Railway автоматически добавляет эту переменную
 
-cursor.execute('''
-    CREATE TABLE IF NOT EXISTS users (
-        user_id BIGINT PRIMARY KEY,
-        username TEXT,
-        first_name TEXT,
-        joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-''')
-conn.commit()
+def get_db_connection():
+    """Создает подключение к PostgreSQL"""
+    conn = psycopg2.connect(DATABASE_URL, sslmode='require')
+    return conn
 
-app = Flask(__name__)
-
-def add_user_to_db(user_id, username, first_name):
-    cursor.execute('''
-        INSERT INTO users (user_id, username, first_name)
-        VALUES (%s, %s, %s)
-        ON CONFLICT (user_id) 
-        DO UPDATE SET username = EXCLUDED.username, first_name = EXCLUDED.first_name
-    ''', (user_id, username, first_name))
-    conn.commit()
-
-def get_user_id_by_username(username):
-    cursor.execute('SELECT user_id FROM users WHERE username = %s', (username,))
-    result = cursor.fetchone()
-    return result[0] if result else None
-
-emojis = ['🐶', '🐱', '🦊', '🐼', '🐨', '🦁']
-user_captcha = {}
-muted_users = {}
-chat_id = -1003829038536
-msk_tz = pytz.timezone('Europe/Moscow')
-
-def parse_time_and_reason(text):
-    patterns = {
-        'minutes': r'(\d+)\s*(м|мин|минута|минуты|минут|m)',
-        'hours': r'(\d+)\s*(ч|час|часа|часов|h)',
-        'days': r'(\d+)\s*(д|день|дня|дней|d)',
-        'weeks': r'(\d+)\s*(н|нед|неделя|недели|недель|w)',
-        'months': r'(\d+)\s*(мес|месяц|месяца|месяцев|m)',
-        'years': r'(\d+)\s*(г|год|года|лет|y)'
-    }
+# ========== ИНИЦИАЛИЗАЦИЯ БАЗЫ ДАННЫХ ==========
+def init_db():
+    conn = get_db_connection()
+    c = conn.cursor()
     
-    text_lower = text.lower()
-    total_seconds = 0
-    reason = ''
-    
-    for unit, pattern in patterns.items():
-        match = re.search(pattern, text_lower)
-        if match:
-            value = int(match.group(1))
-            if unit == 'minutes':
-                total_seconds = value * 60
-            elif unit == 'hours':
-                total_seconds = value * 3600
-            elif unit == 'days':
-                total_seconds = value * 86400
-            elif unit == 'weeks':
-                total_seconds = value * 604800
-            elif unit == 'months':
-                total_seconds = value * 2592000
-            elif unit == 'years':
-                total_seconds = value * 31536000
-            
-            reason = text_lower.replace(match.group(0), '').strip()
-            break
-    
-    return total_seconds, reason
-
-def extract_user_id(message):
-    if message.reply_to_message:
-        user = message.reply_to_message.from_user
-        add_user_to_db(user.id, user.username, user.first_name)
-        return user.id, message.text.replace('/mute', '').strip()
-    
-    text = message.text.replace('/mute', '').strip()
-    words = text.split()
-    
-    for word in words:
-        if word.startswith('@'):
-            username = word[1:]
-            user_id = get_user_id_by_username(username)
-            if user_id:
-                remaining_text = ' '.join([w for w in words if w != word])
-                return user_id, remaining_text
-            continue
-        elif word.isdigit():
-            user_id = int(word)
-            remaining_text = ' '.join([w for w in words if w != word])
-            return user_id, remaining_text
-    
-    return None, text
-
-def unmute_user(chat_id, user_id):
-    try:
-        bot.restrict_chat_member(
-            chat_id,
-            user_id,
-            can_send_messages=True,
-            can_send_media_messages=True,
-            can_send_polls=True,
-            can_send_other_messages=True,
-            can_add_web_page_previews=True
+    # Создаем таблицу users
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            user_id BIGINT PRIMARY KEY,
+            username TEXT,
+            paid_status INTEGER DEFAULT 0,
+            balance DECIMAL DEFAULT 0,
+            referral_count INTEGER DEFAULT 0,
+            referrer_id BIGINT,
+            referral_code TEXT UNIQUE,
+            join_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
-        if user_id in muted_users:
-            del muted_users[user_id]
+    ''')
+    
+    # Создаем таблицу transactions
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS transactions (
+            id SERIAL PRIMARY KEY,
+            user_id BIGINT,
+            amount DECIMAL,
+            type TEXT,
+            status TEXT,
+            invoice_id TEXT UNIQUE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
+    conn.commit()
+    conn.close()
+    logger.info("✅ База данных PostgreSQL готова")
+
+# ========== ЛОГИРОВАНИЕ ==========
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('bot.log'),
+        logging.StreamHandler()
+    ]
+)
+
+transaction_logger = logging.getLogger('transactions')
+transaction_handler = logging.FileHandler('transactions.log')
+transaction_handler.setFormatter(logging.Formatter('%(asctime)s - %(message)s'))
+transaction_logger.addHandler(transaction_handler)
+transaction_logger.setLevel(logging.INFO)
+transaction_logger.propagate = False
+
+logger = logging.getLogger(__name__)
+
+# ========== КУРС ДОЛЛАРА ==========
+def get_usd_rate():
+    try:
+        url = "https://www.cbr-xml-daily.ru/latest.js"
+        response = requests.get(url, timeout=5)
+        data = response.json()
+        
+        if 'rates' in data and 'RUB' in data['rates']:
+            usd_rate = 1 / data['rates']['RUB']
+            return round(usd_rate, 2)
     except:
         pass
-
-def contains_link(text):
-    link_patterns = [
-        r'https?://[^\s]+',
-        r't\.me/[^\s]+',
-        r'telegram\.me/[^\s]+',
-        r'www\.[^\s]+',
-        r'[a-zA-Z0-9\-]+\.(com|ru|org|net|io|app|xyz|info|site)[^\s]*'
-    ]
-    for pattern in link_patterns:
-        if re.search(pattern, text, re.IGNORECASE):
-            return True
-    return False
-
-def contains_forbidden_username(text):
-    forbidden = ['chat', 'bot']
-    words = text.split()
-    for word in words:
-        if word.startswith('@'):
-            username = word[1:].lower()
-            for f in forbidden:
-                if f in username:
-                    return True
-    return False
-
-@bot.message_handler(commands=['start'])
-def start(message):
-    if message.chat.type != 'private':
-        return
-    bot.delete_message(message.chat.id, message.message_id)
-    emoji = random.choice(emojis)
-    user_captcha[message.chat.id] = emoji
-    
-    keyboard = telebot.types.InlineKeyboardMarkup(row_width=3)
-    buttons = []
-    for e in emojis:
-        buttons.append(telebot.types.InlineKeyboardButton(e, callback_data=e))
-    keyboard.add(*buttons)
-    
-    bot.send_message(
-        message.chat.id,
-        f'🔐 Для последующих действий в боте пройдите небольшую капчу.\nВыберите: {emoji}',
-        reply_markup=keyboard
-    )
-
-@bot.callback_query_handler(func=lambda call: call.data in emojis)
-def captcha_callback(call):
-    if call.message.chat.id not in user_captcha:
-        return
-    
-    if call.data == user_captcha[call.message.chat.id]:
-        bot.delete_message(call.message.chat.id, call.message.message_id)
-        
-        link = bot.create_chat_invite_link(chat_id, member_limit=1)
-        
-        keyboard = telebot.types.InlineKeyboardMarkup()
-        button = telebot.types.InlineKeyboardButton('Jess Chat', url=link.invite_link)
-        keyboard.add(button)
-        
-        bot.send_message(
-            call.message.chat.id,
-            '*📲 Проверка пройдена!*\n👇 Нажмите на кнопки ниже для входа.\n🔗 Ссылки станут недействительными через 5 минут.',
-            parse_mode='Markdown',
-            reply_markup=keyboard
-        )
-        
-        Timer(300, bot.revoke_chat_invite_link, args=[chat_id, link.invite_link]).start()
-        del user_captcha[call.message.chat.id]
-    else:
-        emoji = random.choice(emojis)
-        user_captcha[call.message.chat.id] = emoji
-        
-        keyboard = telebot.types.InlineKeyboardMarkup(row_width=3)
-        buttons = []
-        for e in emojis:
-            buttons.append(telebot.types.InlineKeyboardButton(e, callback_data=e))
-        keyboard.add(*buttons)
-        
-        bot.edit_message_text(
-            f'🔐 Капча была решена неверно,повторите попытку.\nВыберите: {emoji}',
-            call.message.chat.id,
-            call.message.message_id,
-            reply_markup=keyboard
-        )
-
-@bot.message_handler(commands=['ban'])
-def ban_user(message):
-    if message.chat.type == 'private':
-        return
-    
-    if message.from_user.id != admin_id:
-        bot.reply_to(message, '🔐 У вас недостаточно прав')
-        return
-    
-    user_id, _ = extract_user_id(message)
-    if not user_id:
-        bot.reply_to(message, '🔐 Укажите данные о пользователе')
-        return
-    
-    bot.ban_chat_member(message.chat.id, user_id)
-    
-    keyboard = telebot.types.InlineKeyboardMarkup()
-    button = telebot.types.InlineKeyboardButton('Разблокировать', callback_data=f'unban_{user_id}')
-    keyboard.add(button)
-    
-    bot.reply_to(message, '🔐 Пользователь заблокирован', reply_markup=keyboard)
-
-@bot.message_handler(commands=['unban'])
-def unban_user(message):
-    if message.chat.type == 'private':
-        return
-    
-    if message.from_user.id != admin_id:
-        bot.reply_to(message, '🔐 У вас недостаточно прав')
-        return
-    
-    user_id, _ = extract_user_id(message)
-    if not user_id:
-        bot.reply_to(message, '🔐 Укажите данные о пользователе')
-        return
     
     try:
-        member = bot.get_chat_member(message.chat.id, user_id)
-        if member.status == 'kicked':
-            bot.unban_chat_member(message.chat.id, user_id)
-            bot.reply_to(message, '🔐 Пользователь разблокирован')
-        else:
-            bot.reply_to(message, '🔐 Пользователь не был заблокирован в данном чате')
+        url = "https://api.exchangerate-api.com/v4/latest/USD"
+        response = requests.get(url, timeout=5)
+        data = response.json()
+        if 'rates' in data and 'RUB' in data['rates']:
+            return round(data['rates']['RUB'], 2)
     except:
-        bot.reply_to(message, '🔐 Пользователь не был заблокирован в данном чате')
+        pass
+    
+    return 90.0
 
-@bot.message_handler(commands=['mute'])
-def mute_user(message):
-    if message.chat.type == 'private':
-        return
-    
-    if message.from_user.id != admin_id:
-        bot.reply_to(message, '🔐 У вас недостаточно прав')
-        return
-    
-    user_id, remaining_text = extract_user_id(message)
-    if not user_id:
-        bot.reply_to(message, '🔐 Укажите данные о пользователе')
-        return
-    
-    if not remaining_text:
-        bot.restrict_chat_member(
-            message.chat.id,
-            user_id,
-            can_send_messages=False,
-            can_send_media_messages=False,
-            can_send_polls=False,
-            can_send_other_messages=False,
-            can_add_web_page_previews=False
-        )
-        muted_users[user_id] = True
-        
-        keyboard = telebot.types.InlineKeyboardMarkup()
-        button = telebot.types.InlineKeyboardButton('Снять ограничение', callback_data=f'unmute_{user_id}')
-        keyboard.add(button)
-        
-        bot.reply_to(message, '🔐 Пользователь замучен навсегда', reply_markup=keyboard)
-        return
-    
-    total_seconds, reason = parse_time_and_reason(remaining_text)
-    if total_seconds == 0:
-        bot.reply_to(message, '🔐 Неверный формат времени')
-        return
-    
-    until_date = datetime.now(msk_tz) + timedelta(seconds=total_seconds)
-    
-    bot.restrict_chat_member(
-        message.chat.id,
-        user_id,
-        until_date=until_date,
-        can_send_messages=False,
-        can_send_media_messages=False,
-        can_send_polls=False,
-        can_send_other_messages=False,
-        can_add_web_page_previews=False
-    )
-    
-    muted_users[user_id] = True
-    Timer(total_seconds, unmute_user, args=[message.chat.id, user_id]).start()
-    
-    time_str = until_date.strftime('%H:%M %d.%m.%Y')
-    response = f'🔐 Пользователь замучен до {time_str} (МСК)'
-    if reason:
-        response += f' по причине: {reason}'
-    
-    keyboard = telebot.types.InlineKeyboardMarkup()
-    button = telebot.types.InlineKeyboardButton('Снять ограничение', callback_data=f'unmute_{user_id}')
-    keyboard.add(button)
-    
-    bot.reply_to(message, response, reply_markup=keyboard)
+# ========== ФУНКЦИИ БД ДЛЯ POSTGRESQL ==========
+def get_user_balance(user_id):
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("SELECT balance FROM users WHERE user_id = %s", (user_id,))
+    result = c.fetchone()
+    conn.close()
+    return float(result[0]) if result else 0
 
-@bot.message_handler(commands=['unmute'])
-def unmute_command(message):
-    if message.chat.type == 'private':
-        return
+def is_admin(user_id):
+    if user_id in ADMIN_IDS:
+        return True
     
-    if message.from_user.id != admin_id:
-        bot.reply_to(message, '🔐 У вас недостаточно прав')
-        return
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("SELECT username FROM users WHERE user_id = %s", (user_id,))
+    result = c.fetchone()
+    conn.close()
     
-    user_id, _ = extract_user_id(message)
-    if not user_id:
-        bot.reply_to(message, '🔐 Укажите данные о пользователе')
-        return
+    if result and result[0] in ADMIN_USERNAMES:
+        return True
+    return False
+
+def get_stats():
+    conn = get_db_connection()
+    c = conn.cursor()
+    
+    c.execute("SELECT COUNT(*) FROM users")
+    total_users = c.fetchone()[0]
+    
+    c.execute("SELECT COUNT(*) FROM users WHERE paid_status = 1")
+    paid_users = c.fetchone()[0]
+    
+    c.execute("SELECT COALESCE(SUM(balance), 0) FROM users")
+    total_balance = float(c.fetchone()[0])
+    
+    c.execute("SELECT COALESCE(SUM(referral_count), 0) FROM users")
+    total_refs = int(c.fetchone()[0])
+    
+    c.execute("SELECT COUNT(*) FROM transactions")
+    total_transactions = c.fetchone()[0]
+    
+    conn.close()
+    
+    return {
+        'total_users': total_users,
+        'paid_users': paid_users,
+        'total_balance': total_balance,
+        'total_refs': total_refs,
+        'total_transactions': total_transactions
+    }
+
+# ========== ЛОГИРОВАНИЕ ТРАНЗАКЦИЙ ==========
+def log_transaction(user_id, amount, type_, details=""):
+    username = f"user_{user_id}"
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("SELECT username FROM users WHERE user_id = %s", (user_id,))
+        result = c.fetchone()
+        if result and result[0]:
+            username = f"@{result[0]}"
+        conn.close()
+    except:
+        pass
+    
+    log_msg = f"{type_.upper()} | User: {user_id} ({username}) | Amount: {amount} USDT | {details}"
+    transaction_logger.info(log_msg)
+
+# ========== ВЫВОД ЧЕРЕЗ CRYPTOBOT ==========
+def withdraw_to_user(user_id, amount):
+    url = "https://pay.crypt.bot/api/transfer"
+    headers = {"Crypto-Pay-API-Token": CRYPTOBOT_TOKEN}
+    
+    data = {
+        "user_id": user_id,
+        "asset": "USDT",
+        "amount": str(amount),
+        "spend_id": f"withdraw_{user_id}_{int(time.time())}",
+        "description": f"Вывод из бота @{BOT_USERNAME}"
+    }
     
     try:
-        member = bot.get_chat_member(message.chat.id, user_id)
-        if not member.can_send_messages:
-            unmute_user(message.chat.id, user_id)
-            bot.reply_to(message, '🔐 Пользователь размучен')
+        logger.info(f"💰 Вывод {amount} USDT пользователю {user_id}")
+        response = requests.post(url, headers=headers, json=data)
+        result = response.json()
+        
+        if result.get('ok'):
+            log_transaction(user_id, amount, "WITHDRAW", "Успешно")
+            return {'success': True, 'message': f"✅ {amount} USDT отправлено!"}
         else:
-            bot.reply_to(message, '🔐 У пользователя отсутствуют ограничения')
+            error_msg = result.get('error', 'Неизвестная ошибка')
+            log_transaction(user_id, amount, "WITHDRAW_FAILED", f"Ошибка: {error_msg}")
+            return {'success': False, 'message': f"❌ Ошибка: {error_msg}"}
+            
+    except Exception as e:
+        log_transaction(user_id, amount, "WITHDRAW_ERROR", str(e))
+        return {'success': False, 'message': f"❌ Ошибка: {str(e)}"}
+
+# ========== СОЗДАНИЕ СЧЕТА ==========
+def create_crypto_invoice(user_id, amount):
+    url = "https://pay.crypt.bot/api/createInvoice"
+    headers = {"Crypto-Pay-API-Token": CRYPTOBOT_TOKEN}
+    
+    data = {
+        "asset": "USDT",
+        "amount": str(amount),
+        "description": f"Оплата доступа для user_{user_id}",
+        "payload": str(user_id),
+        "paid_btn_name": "openBot",
+        "paid_btn_url": f"https://t.me/{BOT_USERNAME}"
+    }
+    
+    try:
+        response = requests.post(url, headers=headers, json=data)
+        result = response.json()
+        
+        if result.get('ok'):
+            invoice_id = result['result']['invoice_id']
+            log_transaction(user_id, amount, "INVOICE_CREATED", f"Invoice: {invoice_id}")
+            return result['result']
+        else:
+            log_transaction(user_id, amount, "INVOICE_ERROR", str(result))
+            return None
+    except Exception as e:
+        log_transaction(user_id, amount, "INVOICE_ERROR", str(e))
+        return None
+
+# ========== ПРОВЕРКА ПЛАТЕЖА ==========
+def check_payment_status(invoice_id):
+    url = "https://pay.crypt.bot/api/getInvoices"
+    headers = {"Crypto-Pay-API-Token": CRYPTOBOT_TOKEN}
+    
+    try:
+        response = requests.get(url, headers=headers, params={"invoice_ids": invoice_id})
+        result = response.json()
+        if result.get('ok') and result['result']['items']:
+            return result['result']['items'][0]['status']
     except:
-        bot.reply_to(message, '🔐 У пользователя отсутствуют ограничения')
+        pass
+    return 'active'
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith('unmute_'))
-def unmute_callback(call):
-    if call.message.chat.type == 'private':
-        return
+# ========== ОБРАБОТКА ПЛАТЕЖА (ДВУХУРОВНЕВАЯ РЕФЕРАЛКА) ==========
+def process_payment(user_id, invoice_id, context):
+    conn = get_db_connection()
+    c = conn.cursor()
     
-    if call.from_user.id != admin_id:
-        bot.answer_callback_query(call.id, 'У вас нет прав')
-        return
+    c.execute("SELECT referrer_id FROM users WHERE user_id = %s", (user_id,))
+    result = c.fetchone()
+    referrer_id = result[0] if result else None
     
-    user_id = int(call.data.split('_')[1])
-    unmute_user(call.message.chat.id, user_id)
+    c.execute("UPDATE users SET paid_status = 1 WHERE user_id = %s", (user_id,))
     
-    keyboard = telebot.types.InlineKeyboardMarkup()
-    button = telebot.types.InlineKeyboardButton('Ограничения сняты', callback_data='disabled')
-    keyboard.add(button)
+    log_transaction(user_id, 5, "PAYMENT", f"Оплата доступа, Invoice: {invoice_id}")
     
-    bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=keyboard)
-    bot.answer_callback_query(call.id)
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith('unban_'))
-def unban_callback(call):
-    if call.message.chat.type == 'private':
-        return
-    
-    if call.from_user.id != admin_id:
-        bot.answer_callback_query(call.id, 'У вас нет прав')
-        return
-    
-    user_id = int(call.data.split('_')[1])
-    bot.unban_chat_member(call.message.chat.id, user_id)
-    
-    keyboard = telebot.types.InlineKeyboardMarkup()
-    button = telebot.types.InlineKeyboardButton('Пользователь разблокирован', callback_data='disabled')
-    keyboard.add(button)
-    
-    bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=keyboard)
-    bot.answer_callback_query(call.id)
-
-@bot.message_handler(commands=['help'])
-def help_command(message):
-    if message.chat.type == 'private':
-        bot.reply_to(message, 'Доступные команды:\n/start - запуск бота\n/help - помощь')
-    else:
-        if message.from_user.id == admin_id:
-            bot.reply_to(message, 'Команды админа:\n/ban\n/unban\n/mute\n/unmute')
-        else:
-            bot.reply_to(message, 'У вас нет доступа к командам')
-
-@bot.message_handler(func=lambda message: True)
-def handle_messages(message):
-    if message.chat.type == 'private':
-        return
-    
-    add_user_to_db(message.from_user.id, message.from_user.username, message.from_user.first_name)
-    
-    if message.from_user.id != admin_id and message.text:
-        if contains_link(message.text) or contains_forbidden_username(message.text):
+    if referrer_id:
+        # 1 УРОВЕНЬ - 3$
+        c.execute("SELECT balance, referral_count FROM users WHERE user_id = %s", (referrer_id,))
+        ref_data = c.fetchone()
+        
+        if ref_data:
+            new_balance = float(ref_data[0]) + 3
+            new_count = ref_data[1] + 1
+            c.execute("UPDATE users SET balance = %s, referral_count = %s WHERE user_id = %s", 
+                     (new_balance, new_count, referrer_id))
+            
+            log_transaction(referrer_id, 3, "REFERRAL_LEVEL1", f"За пользователя {user_id}")
+            
             try:
-                bot.delete_message(message.chat.id, message.message_id)
-                
-                until_date = datetime.now(msk_tz) + timedelta(hours=1)
-                bot.restrict_chat_member(
-                    message.chat.id,
-                    message.from_user.id,
-                    until_date=until_date,
-                    can_send_messages=False,
-                    can_send_media_messages=False,
-                    can_send_polls=False,
-                    can_send_other_messages=False,
-                    can_add_web_page_previews=False
+                context.bot.send_message(
+                    chat_id=referrer_id,
+                    text=f"🎉 Вам начислено 3 USDT за нового реферала!\n🏦 Баланс: {new_balance} USDT"
                 )
+            except:
+                pass
+            
+            # 2 УРОВЕНЬ - 1$
+            c.execute("SELECT referrer_id FROM users WHERE user_id = %s", (referrer_id,))
+            result2 = c.fetchone()
+            referrer_level2 = result2[0] if result2 else None
+            
+            if referrer_level2:
+                c.execute("SELECT balance FROM users WHERE user_id = %s", (referrer_level2,))
+                ref2_data = c.fetchone()
                 
-                muted_users[message.from_user.id] = True
-                Timer(3600, unmute_user, args=[message.chat.id, message.from_user.id]).start()
-                
-                username = f"@{message.from_user.username}" if message.from_user.username else f"{message.from_user.first_name}"
-                
-                keyboard = telebot.types.InlineKeyboardMarkup()
-                button = telebot.types.InlineKeyboardButton('Снять ограничения', callback_data=f'unmute_{message.from_user.id}')
-                keyboard.add(button)
-                
-                if contains_link(message.text):
-                    text = f'🔐 {username} Отправлять ссылки запрещено. Вы заглушены на: 1 час'
-                else:
-                    text = f'🔐 {username} Запрещены ссылки на сторонние группы и боты, ознакомьтесь с правилами чата. Ограничение: 1 час'
-                
-                bot.send_message(
-                    message.chat.id,
-                    text,
-                    reply_markup=keyboard
+                if ref2_data:
+                    new_balance2 = float(ref2_data[0]) + 1
+                    c.execute("UPDATE users SET balance = %s WHERE user_id = %s", 
+                             (new_balance2, referrer_level2))
+                    
+                    log_transaction(referrer_level2, 1, "REFERRAL_LEVEL2", f"За пользователя {user_id} (через {referrer_id})")
+                    
+                    try:
+                        context.bot.send_message(
+                            chat_id=referrer_level2,
+                            text=f"✨ Вам начислен 1 USDT за реферала второго уровня!\n🏦 Баланс: {new_balance2} USDT"
+                        )
+                    except:
+                        pass
+    
+    conn.commit()
+    conn.close()
+    return True
+
+# ========== КОМАНДА СТАРТ ==========
+def start(update: Update, context: CallbackContext):
+    user = update.effective_user
+    user_id = user.id
+    
+    conn = get_db_connection()
+    c = conn.cursor()
+    
+    c.execute("SELECT * FROM users WHERE user_id = %s", (user_id,))
+    existing_user = c.fetchone()
+    
+    args = context.args
+    referrer_id = None
+    
+    if args and args[0].startswith('ref_'):
+        ref_code = args[0]
+        c.execute("SELECT user_id FROM users WHERE referral_code = %s", (ref_code,))
+        result = c.fetchone()
+        if result:
+            referrer_id = result[0]
+    
+    if not existing_user:
+        # Генерируем реферальный код сразу
+        new_ref_code = 'ref_' + ''.join(random.choices(string.ascii_letters + string.digits, k=8))
+        c.execute("INSERT INTO users (user_id, username, paid_status, referrer_id, referral_code) VALUES (%s, %s, 0, %s, %s)",
+                  (user_id, user.username, referrer_id, new_ref_code))
+        conn.commit()
+        logger.info(f"👤 Новый пользователь {user_id}, реферер: {referrer_id}, код: {new_ref_code}")
+    
+    c.execute("SELECT paid_status FROM users WHERE user_id = %s", (user_id,))
+    paid_status = c.fetchone()[0]
+    conn.close()
+    
+    if paid_status == 0 and not is_admin(user_id):
+        keyboard = [[InlineKeyboardButton("💳 Оплатить 5 USDT", callback_data='pay')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        update.message.reply_text(
+            "Для использования оплатите 5 USDT",
+            reply_markup=reply_markup
+        )
+    else:
+        keyboard = [
+            [InlineKeyboardButton("Профиль", callback_data='profile')],
+            [
+                InlineKeyboardButton("Реферальная ссылка", callback_data='referral'),
+                InlineKeyboardButton("Вывести", callback_data='withdraw')
+            ]
+        ]
+        
+        if is_admin(user_id):
+            keyboard.append([InlineKeyboardButton("Админ панель", callback_data='admin_panel')])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        text = (
+            "*🔮 Galaxy - безграничная вселенная возможностей!*\n\n"
+            "• В данном сервисе приглашайте рефералов и получайте за это деньги!"
+        )
+        
+        update.message.reply_text(
+            text,
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+
+# ========== АДМИН ПАНЕЛЬ ==========
+def show_admin_panel(query, user_id):
+    if not is_admin(user_id):
+        query.edit_message_text("У вас нет доступа к админ-панели")
+        return
+    
+    keyboard = [
+        [
+            InlineKeyboardButton("Статистика", callback_data='admin_stats'),
+            InlineKeyboardButton("Логи", callback_data='admin_logs')
+        ],
+        [
+            InlineKeyboardButton("Баланс бота", callback_data='admin_balance'),
+            InlineKeyboardButton("Пользователи", callback_data='admin_users')
+        ],
+        [InlineKeyboardButton("Назад", callback_data='back_to_menu')]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    query.edit_message_text(
+        "Админ панель:",
+        reply_markup=reply_markup
+    )
+
+def show_admin_stats(query):
+    stats = get_stats()
+    
+    text = (
+        "<blockquote>"
+        f"📊 Статистика\n\n"
+        f"Всего пользователей: {stats['total_users']}\n"
+        f"Оплативших: {stats['paid_users']}\n"
+        f"Общий баланс: {stats['total_balance']:.2f} USDT\n"
+        f"Всего рефералов: {stats['total_refs']}\n"
+        f"Транзакций: {stats['total_transactions']}"
+        "</blockquote>"
+    )
+    
+    keyboard = [[InlineKeyboardButton("Назад", callback_data='admin_panel')]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    query.edit_message_text(
+        text,
+        reply_markup=reply_markup,
+        parse_mode='HTML'
+    )
+
+def send_logs(query, context, log_type='bot'):
+    try:
+        filename = 'bot.log' if log_type == 'bot' else 'transactions.log'
+        
+        if not os.path.exists(filename):
+            temp_filename = f'temp_{log_type}.log'
+            with open(temp_filename, 'w', encoding='utf-8') as f:
+                f.write(f"📭 Файл {log_type}.log пуст. Транзакций пока нет.\n")
+                f.write(f"Создано: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            
+            with open(temp_filename, 'rb') as f:
+                context.bot.send_document(
+                    chat_id=query.from_user.id,
+                    document=f,
+                    filename=f'{log_type}_log_{datetime.now().strftime("%Y%m%d_%H%M%S")}.txt',
+                    caption=f"📋 Логи {log_type} (файл был пуст)"
                 )
-            except Exception as e:
-                print(f"Error in mute: {e}")
+            
+            os.remove(temp_filename)
+            query.answer()
+            return
+        
+        if os.path.getsize(filename) == 0:
+            temp_filename = f'temp_{log_type}.log'
+            with open(temp_filename, 'w', encoding='utf-8') as f:
+                f.write(f"📭 Файл {log_type}.log пуст. Транзакций пока нет.\n")
+                f.write(f"Создано: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            
+            with open(temp_filename, 'rb') as f:
+                context.bot.send_document(
+                    chat_id=query.from_user.id,
+                    document=f,
+                    filename=f'{log_type}_log_{datetime.now().strftime("%Y%m%d_%H%M%S")}.txt',
+                    caption=f"📋 Логи {log_type} (файл был пуст)"
+                )
+            
+            os.remove(temp_filename)
+            query.answer()
+            return
+            
+        with open(filename, 'rb') as f:
+            context.bot.send_document(
+                chat_id=query.from_user.id,
+                document=f,
+                filename=f'{log_type}_log_{datetime.now().strftime("%Y%m%d_%H%M%S")}.txt',
+                caption=f"📋 Логи {log_type}"
+            )
+        query.answer("✅ Логи отправлены")
+        
+    except Exception as e:
+        logger.error(f"Ошибка при отправке логов: {e}")
+        query.answer(f"❌ Ошибка: {e}", show_alert=True)
 
-@bot.chat_member_handler()
-def handle_new_member(update):
-    if update.new_chat_member:
-        user = update.new_chat_member.user
-        add_user_to_db(user.id, user.username, user.first_name)
+def show_admin_balance(query):
+    url = "https://pay.crypt.bot/api/getBalance"
+    headers = {"Crypto-Pay-API-Token": CRYPTOBOT_TOKEN}
+    
+    try:
+        response = requests.get(url, headers=headers)
+        result = response.json()
+        
+        if result.get('ok'):
+            balances = result['result']
+            usdt_balance = 0
+            
+            for asset in balances:
+                if asset.get('asset') == 'USDT':
+                    usdt_balance = float(asset.get('available', 0))
+                    break
+            
+            text = (
+                "<blockquote>"
+                f"🏦 Баланс бота в CryptoBot:\n\n"
+                f"USDT: {usdt_balance}"
+                "</blockquote>"
+            )
+        else:
+            error_msg = result.get('error', 'Неизвестная ошибка')
+            text = (
+                "<blockquote>"
+                f"❌ Ошибка API:\n{error_msg}"
+                "</blockquote>"
+            )
+    except Exception as e:
+        text = (
+            "<blockquote>"
+            f"❌ Ошибка:\n{str(e)}"
+            "</blockquote>"
+        )
+    
+    keyboard = [[InlineKeyboardButton("Назад", callback_data='admin_panel')]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    query.edit_message_text(
+        text,
+        reply_markup=reply_markup,
+        parse_mode='HTML'
+    )
 
-@app.route('/webhook', methods=['POST'])
-def webhook():
-    json_str = request.get_data().decode('UTF-8')
-    update = telebot.types.Update.de_json(json_str)
-    bot.process_new_updates([update])
-    return 'ok', 200
+def show_admin_users(query):
+    conn = get_db_connection()
+    c = conn.cursor()
+    
+    c.execute("SELECT user_id, username, paid_status, balance, referral_count, join_date FROM users ORDER BY user_id DESC LIMIT 10")
+    last_users = c.fetchall()
+    
+    c.execute("SELECT COUNT(*) FROM users")
+    total_users = c.fetchone()[0]
+    
+    conn.close()
+    
+    if not last_users:
+        text = "<blockquote>📭 Нет пользователей</blockquote>"
+        keyboard = [[InlineKeyboardButton("Назад", callback_data='admin_panel')]]
+    else:
+        text = "<blockquote>👥 Последние 10 пользователей:\n\n"
+        for user in last_users:
+            status = "✅" if user[2] else "❌"
+            join_date = user[5][:10] if user[5] else "неизвестно"
+            text += f"{status} ID: {user[0]} | @{user[1] or 'нет'}\n"
+            text += f"   Баланс: {user[3]} | Реф: {user[4]} | {join_date}\n\n"
+        text += f"Всего пользователей: {total_users}</blockquote>"
+        
+        keyboard = [
+            [InlineKeyboardButton("Все пользователи", callback_data='export_users')],
+            [InlineKeyboardButton("Назад", callback_data='admin_panel')]
+        ]
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    try:
+        query.edit_message_text(
+            text,
+            reply_markup=reply_markup,
+            parse_mode='HTML'
+        )
+    except Exception as e:
+        logger.error(f"Ошибка в show_admin_users: {e}")
+        query.edit_message_text(
+            "❌ Ошибка загрузки списка пользователей",
+            reply_markup=reply_markup
+        )
+
+def export_all_users(query, context):
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("SELECT user_id, username, paid_status, balance, referral_count, referrer_id, referral_code, join_date FROM users ORDER BY user_id")
+        users = c.fetchall()
+        conn.close()
+        
+        filename = f'users_export_{datetime.now().strftime("%Y%m%d_%H%M%S")}.txt'
+        
+        with open(filename, 'w', encoding='utf-8') as f:
+            f.write("=" * 80 + "\n")
+            f.write(f"ВСЕ ПОЛЬЗОВАТЕЛИ БОТА @{BOT_USERNAME}\n")
+            f.write(f"Дата выгрузки: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write(f"Всего пользователей: {len(users)}\n")
+            f.write("=" * 80 + "\n\n")
+            
+            for user in users:
+                user_id, username, paid_status, balance, referral_count, referrer_id, referral_code, join_date = user
+                
+                f.write(f"📱 ID: {user_id}\n")
+                f.write(f"👤 Username: @{username if username else 'нет'}\n")
+                f.write(f"✅ Статус: {'Оплатил' if paid_status else 'Не оплатил'}\n")
+                f.write(f"🏦 Баланс: {balance} USDT\n")
+                f.write(f"👥 Рефералов: {referral_count}\n")
+                f.write(f"🔗 Реф код: {referral_code if referral_code else 'нет'}\n")
+                f.write(f"👆 Пригласил: {referrer_id if referrer_id else 'нет'}\n")
+                f.write(f"📅 Дата регистрации: {join_date[:19] if join_date else 'неизвестно'}\n")
+                f.write("-" * 40 + "\n")
+        
+        with open(filename, 'rb') as f:
+            context.bot.send_document(
+                chat_id=query.from_user.id,
+                document=f,
+                filename=filename,
+                caption=f"📊 Выгрузка всех пользователей ({len(users)} чел.)"
+            )
+        
+        os.remove(filename)
+        query.answer("✅ Файл отправлен")
+        
+    except Exception as e:
+        logger.error(f"Ошибка при экспорте пользователей: {e}")
+        query.answer(f"❌ Ошибка: {e}", show_alert=True)
+
+# ========== ПРОФИЛЬ ==========
+def show_profile(query, user_id):
+    balance = get_user_balance(user_id)
+    
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("SELECT referral_count FROM users WHERE user_id = %s", (user_id,))
+    referrals = c.fetchone()[0]
+    conn.close()
+    
+    usd_rate = get_usd_rate()
+    rub = balance * usd_rate
+    ref_income = referrals * 3
+    
+    text = (
+        "<blockquote>"
+        f"📲 Профиль\n\n"
+        f"🏦 Баланс: {balance} USDT (~{rub:.0f}₽)\n"
+        f"👥 Рефералы: {referrals}шт (~{ref_income} USDT)\n"
+        f"📉 Минимум вывода: {MIN_WITHDRAW}$\n"
+        f"💱 Курс USD: {usd_rate}₽"
+        "</blockquote>"
+    )
+    
+    keyboard = [[InlineKeyboardButton("Назад", callback_data='back_to_menu')]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    query.edit_message_text(
+        text,
+        reply_markup=reply_markup,
+        parse_mode='HTML'
+    )
+
+# ========== РЕФЕРАЛЬНАЯ ССЫЛКА ==========
+def show_referral(query, user_id):
+    conn = get_db_connection()
+    c = conn.cursor()
+    
+    c.execute("SELECT referral_code FROM users WHERE user_id = %s", (user_id,))
+    result = c.fetchone()
+    
+    if result and result[0]:
+        ref_code = result[0]
+    else:
+        ref_code = 'ref_' + ''.join(random.choices(string.ascii_letters + string.digits, k=8))
+        c.execute("UPDATE users SET referral_code = %s WHERE user_id = %s", (ref_code, user_id))
+        conn.commit()
+    
+    conn.close()
+    
+    ref_link = f"https://t.me/{BOT_USERNAME}?start={ref_code}"
+    
+    text = (
+        "*🏦 Ваша реферальная ссылка:*\n\n"
+        f"`{ref_link}`\n\n"
+        "• За каждого реферала вы получите 3 USDT!\n"
+        "• За рефералов второго уровня +1 USDT!"
+    )
+    
+    keyboard = [
+        [InlineKeyboardButton("Назад", callback_data='back_to_menu')]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    query.edit_message_text(
+        text,
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+
+# ========== ВЫВОД ==========
+def show_withdraw(query, user_id, context):
+    balance = get_user_balance(user_id)
+    
+    if balance < MIN_WITHDRAW:
+        need = MIN_WITHDRAW - balance
+        referrals_needed = (need + 2) // 3
+        
+        text = (
+            "<blockquote>"
+            f"🔮 Ваш баланс: {balance} USDT\n"
+            f"📲 Для вывода нужно минимум {MIN_WITHDRAW} USDT\n"
+            f"🔗 Пригласите ещё {referrals_needed} рефералов!"
+            "</blockquote>"
+        )
+        
+        keyboard = [[InlineKeyboardButton("Назад", callback_data='back_to_menu')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        query.edit_message_text(
+            text,
+            reply_markup=reply_markup,
+            parse_mode='HTML'
+        )
+    else:
+        text = (
+            f"*🏦 Ваш баланс: {balance} USDT*\n\n\n"
+            f"• Вывод от {MIN_WITHDRAW} USDT"
+        )
+        
+        keyboard = [
+            [
+                InlineKeyboardButton("Вывести", callback_data='process_withdraw'),
+                InlineKeyboardButton("Назад", callback_data='back_to_menu')
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        query.edit_message_text(
+            text,
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+
+# ========== ОБРАБОТЧИК ТЕКСТА ==========
+def handle_text(update: Update, context: CallbackContext):
+    user_id = update.effective_user.id
+    
+    if context.user_data.get('awaiting_withdraw'):
+        try:
+            amount = float(update.message.text.replace(',', '.'))
+            balance = get_user_balance(user_id)
+            
+            if amount < MIN_WITHDRAW:
+                update.message.reply_text(f"❌ Минимальная сумма вывода {MIN_WITHDRAW} USDT")
+                return
+            
+            if amount > balance:
+                update.message.reply_text(f"❌ Недостаточно средств. Баланс: {balance} USDT")
+                return
+            
+            result = withdraw_to_user(user_id, amount)
+            
+            if result['success']:
+                conn = get_db_connection()
+                c = conn.cursor()
+                c.execute("UPDATE users SET balance = balance - %s WHERE user_id = %s", (amount, user_id))
+                conn.commit()
+                conn.close()
+                
+                update.message.reply_text(
+                    f"🔮",
+                    reply_to_message_id=update.message.message_id
+                )
+            else:
+                update.message.reply_text(result['message'])
+            
+            context.user_data['awaiting_withdraw'] = False
+            
+        except ValueError:
+            update.message.reply_text("❌ Введите число")
+
+# ========== ОБРАБОТЧИК КНОПОК ==========
+def button_callback(update: Update, context: CallbackContext):
+    query = update.callback_query
+    user_id = query.from_user.id
+    
+    if query.data == 'pay':
+        invoice = create_crypto_invoice(user_id, 5)
+        if invoice:
+            keyboard = [
+                [InlineKeyboardButton("Перейти к оплате", url=invoice['pay_url'])],
+                [InlineKeyboardButton("Проверить оплату", callback_data=f'check_{invoice["invoice_id"]}')],
+                [InlineKeyboardButton("Назад", callback_data='back_to_start')]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            query.edit_message_text(
+                "💰 Счет на 5 USDT создан!\n\n1. Оплати в @CryptoBot\n2. Нажми 'Проверить'",
+                reply_markup=reply_markup
+            )
+        else:
+            query.edit_message_text("❌ Ошибка создания счета. Попробуйте позже.")
+    
+    elif query.data.startswith('check_'):
+        invoice_id = query.data.replace('check_', '')
+        status = check_payment_status(invoice_id)
+        
+        if status == 'paid':
+            process_payment(user_id, invoice_id, context)
+            
+            keyboard = [
+                [InlineKeyboardButton("Профиль", callback_data='profile')],
+                [
+                    InlineKeyboardButton("Реферальная ссылка", callback_data='referral'),
+                    InlineKeyboardButton("Вывести", callback_data='withdraw')
+                ]
+            ]
+            
+            if is_admin(user_id):
+                keyboard.append([InlineKeyboardButton("Админ панель", callback_data='admin_panel')])
+            
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            text = (
+                "*🔮 Galaxy - безграничная вселенная возможностей!*\n\n"
+                "• В данном сервисе приглашайте рефералов и получайте за это деньги!"
+            )
+            
+            query.edit_message_text(
+                text,
+                reply_markup=reply_markup,
+                parse_mode='Markdown'
+            )
+        else:
+            keyboard = [
+                [InlineKeyboardButton("Проверить снова", callback_data=f'check_{invoice_id}')],
+                [InlineKeyboardButton("Назад", callback_data='back_to_start')]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            query.edit_message_text(
+                "⏳ Платеж еще не найден.\n\nУбедитесь что вы оплатили и нажмите 'Проверить снова'",
+                reply_markup=reply_markup
+            )
+    
+    elif query.data == 'admin_panel':
+        show_admin_panel(query, user_id)
+    elif query.data == 'admin_stats':
+        show_admin_stats(query)
+    elif query.data == 'admin_logs':
+        keyboard = [
+            [
+                InlineKeyboardButton("Логи бота", callback_data='admin_logs_bot'),
+                InlineKeyboardButton("Транзакции", callback_data='admin_logs_trans')
+            ],
+            [InlineKeyboardButton("Назад", callback_data='admin_panel')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        query.edit_message_text("Выберите тип логов:", reply_markup=reply_markup)
+    elif query.data == 'admin_logs_bot':
+        send_logs(query, context, 'bot')
+    elif query.data == 'admin_logs_trans':
+        send_logs(query, context, 'transactions')
+    elif query.data == 'admin_balance':
+        show_admin_balance(query)
+    elif query.data == 'admin_users':
+        show_admin_users(query)
+    elif query.data == 'export_users':
+        export_all_users(query, context)
+    
+    elif query.data == 'profile':
+        show_profile(query, user_id)
+    elif query.data == 'referral':
+        show_referral(query, user_id)
+    elif query.data == 'withdraw':
+        show_withdraw(query, user_id, context)
+    elif query.data == 'process_withdraw':
+        query.edit_message_text("💰 Введите сумму вывода:")
+        context.user_data['awaiting_withdraw'] = True
+    elif query.data == 'back_to_menu':
+        keyboard = [
+            [InlineKeyboardButton("Профиль", callback_data='profile')],
+            [
+                InlineKeyboardButton("Реферальная ссылка", callback_data='referral'),
+                InlineKeyboardButton("Вывести", callback_data='withdraw')
+            ]
+        ]
+        
+        if is_admin(user_id):
+            keyboard.append([InlineKeyboardButton("Админ панель", callback_data='admin_panel')])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        text = (
+            "*🔮 Galaxy - безграничная вселенная возможностей!*\n\n"
+            "• В данном сервисе приглашайте рефералов и получайте за это деньги!"
+        )
+        
+        query.edit_message_text(
+            text,
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+    elif query.data == 'back_to_start':
+        if is_admin(user_id):
+            keyboard = [
+                [InlineKeyboardButton("Профиль", callback_data='profile')],
+                [
+                    InlineKeyboardButton("Реферальная ссылка", callback_data='referral'),
+                    InlineKeyboardButton("Вывести", callback_data='withdraw')
+                ],
+                [InlineKeyboardButton("Админ панель", callback_data='admin_panel')]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            text = (
+                "*🔮 Galaxy - безграничная вселенная возможностей!*\n\n"
+                "• В данном сервисе приглашайте рефералов и получайте за это деньги!"
+            )
+            query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+        else:
+            keyboard = [[InlineKeyboardButton("💳 Оплатить 5 USDT", callback_data='pay')]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            query.edit_message_text(
+                "Для использования оплатите 5 USDT",
+                reply_markup=reply_markup
+            )
+
+# ========== ЗАПУСК ==========
+def main():
+    updater = Updater(BOT_TOKEN, use_context=True)
+    dp = updater.dispatcher
+    
+    dp.add_handler(CommandHandler("start", start))
+    dp.add_handler(CallbackQueryHandler(button_callback))
+    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_text))
+    
+    updater.start_polling()
+    logger.info("🚀 Бот @%s запущен с PostgreSQL! Мин.вывод: %s$", BOT_USERNAME, MIN_WITHDRAW)
+    updater.idle()
 
 if __name__ == '__main__':
-    bot.remove_webhook()
-    bot.set_webhook(url=f"https://{os.environ['RAILWAY_PUBLIC_DOMAIN']}/webhook")
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
+    # Сначала инициализируем БД
+    init_db()
+    # Потом запускаем бота
+    main()
