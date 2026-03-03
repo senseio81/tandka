@@ -1,46 +1,53 @@
 # ==== ПРИНУДИТЕЛЬНАЯ УСТАНОВКА ====
-# ==== ПРИНУДИТЕЛЬНАЯ УСТАНОВКА ====
 import subprocess
 import sys
+import os
 
-print("🚀 Устанавливаю пакеты из requirements.txt...")
+print("🚀 Устанавливаю правильные версии пакетов...")
 
-# Переустанавливаем всё из requirements.txt
-subprocess.check_call([sys.executable, "-m", "pip", "install", "--upgrade", "--force-reinstall", "-r", "requirements.txt"])
+# Удаляем конфликтующие пакеты если есть
+subprocess.check_call([sys.executable, "-m", "pip", "uninstall", "-y", "apscheduler", "setuptools"])
 
-# Проверяем версию
-import telegram
-print(f"✅ Установлена версия telegram-bot: {telegram.__version__}")
+# Ставим старую версию setuptools (нужна для pkg_resources)
+subprocess.check_call([sys.executable, "-m", "pip", "install", "setuptools==65.0.0"])
+
+# Ставим telegram-bot 13.15
+subprocess.check_call([sys.executable, "-m", "pip", "install", "--force-reinstall", "python-telegram-bot==13.15"])
+
+# Блокируем установку apscheduler
+subprocess.check_call([sys.executable, "-m", "pip", "install", "apscheduler==3.9.0"])
+
+print("✅ Пакеты установлены")
 # ===================================
 
-# Теперь импортируем всё остальное
+# Теперь импортируем
+import telegram
+print(f"✅ Версия telegram-bot: {telegram.__version__}")
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, MessageHandler, Filters, CallbackContext
 import psycopg2
 import psycopg2.extras
 import requests
-import os
 import random
 import string
 import time
 from datetime import datetime
 import logging
 
-# ... дальше твой код
 # ========== НАСТРОЙКА ==========
 BOT_TOKEN = os.environ['BOT_TOKEN']
-CRYPTOBOT_TOKEN = os.environ['CRYPTOBOT_TOKEN']  # Токен от @CryptoBot
+CRYPTOBOT_TOKEN = os.environ['CRYPTOBOT_TOKEN']
 BOT_USERNAME = "Galaxy_MoneyBot"
 MIN_WITHDRAW = 8
 ADMIN_IDS = [8503054217]
 ADMIN_USERNAMES = ["siberia_1488"]
 
-# ========== ПОДКЛЮЧЕНИЕ К POSTGRESQL (RAILWAY) ==========
-DATABASE_URL = os.environ['DATABASE_URL']  # Railway автоматически добавляет эту переменную
+# ========== ПОДКЛЮЧЕНИЕ К POSTGRESQL ==========
+DATABASE_URL = os.environ['DATABASE_URL']
 
 def get_db_connection():
-    """Создает подключение к PostgreSQL"""
-    conn = psycopg2.connect(DATABASE_URL, sslmode='require')
+    conn = psycopg2.connect(DATABASE_URL)
     return conn
 
 # ========== ИНИЦИАЛИЗАЦИЯ БАЗЫ ДАННЫХ ==========
@@ -48,7 +55,6 @@ def init_db():
     conn = get_db_connection()
     c = conn.cursor()
     
-    # Создаем таблицу users
     c.execute('''
         CREATE TABLE IF NOT EXISTS users (
             user_id BIGINT PRIMARY KEY,
@@ -62,7 +68,6 @@ def init_db():
         )
     ''')
     
-    # Создаем таблицу transactions
     c.execute('''
         CREATE TABLE IF NOT EXISTS transactions (
             id SERIAL PRIMARY KEY,
@@ -122,7 +127,7 @@ def get_usd_rate():
     
     return 90.0
 
-# ========== ФУНКЦИИ БД ДЛЯ POSTGRESQL ==========
+# ========== ФУНКЦИИ БД ==========
 def get_user_balance(user_id):
     conn = get_db_connection()
     c = conn.cursor()
@@ -264,7 +269,7 @@ def check_payment_status(invoice_id):
         pass
     return 'active'
 
-# ========== ОБРАБОТКА ПЛАТЕЖА (ДВУХУРОВНЕВАЯ РЕФЕРАЛКА) ==========
+# ========== ОБРАБОТКА ПЛАТЕЖА ==========
 def process_payment(user_id, invoice_id, context):
     conn = get_db_connection()
     c = conn.cursor()
@@ -348,7 +353,6 @@ def start(update: Update, context: CallbackContext):
             referrer_id = result[0]
     
     if not existing_user:
-        # Генерируем реферальный код сразу
         new_ref_code = 'ref_' + ''.join(random.choices(string.ascii_letters + string.digits, k=8))
         c.execute("INSERT INTO users (user_id, username, paid_status, referrer_id, referral_code) VALUES (%s, %s, 0, %s, %s)",
                   (user_id, user.username, referrer_id, new_ref_code))
@@ -556,7 +560,7 @@ def show_admin_users(query):
         text = "<blockquote>👥 Последние 10 пользователей:\n\n"
         for user in last_users:
             status = "✅" if user[2] else "❌"
-            join_date = user[5][:10] if user[5] else "неизвестно"
+            join_date = user[5].strftime("%Y-%m-%d") if user[5] else "неизвестно"
             text += f"{status} ID: {user[0]} | @{user[1] or 'нет'}\n"
             text += f"   Баланс: {user[3]} | Реф: {user[4]} | {join_date}\n\n"
         text += f"Всего пользователей: {total_users}</blockquote>"
@@ -608,7 +612,7 @@ def export_all_users(query, context):
                 f.write(f"👥 Рефералов: {referral_count}\n")
                 f.write(f"🔗 Реф код: {referral_code if referral_code else 'нет'}\n")
                 f.write(f"👆 Пригласил: {referrer_id if referrer_id else 'нет'}\n")
-                f.write(f"📅 Дата регистрации: {join_date[:19] if join_date else 'неизвестно'}\n")
+                f.write(f"📅 Дата регистрации: {join_date.strftime('%Y-%m-%d %H:%M:%S') if join_date else 'неизвестно'}\n")
                 f.write("-" * 40 + "\n")
         
         with open(filename, 'rb') as f:
@@ -785,9 +789,9 @@ def button_callback(update: Update, context: CallbackContext):
         invoice = create_crypto_invoice(user_id, 5)
         if invoice:
             keyboard = [
-                [InlineKeyboardButton("Перейти к оплате", url=invoice['pay_url'])],
-                [InlineKeyboardButton("Проверить оплату", callback_data=f'check_{invoice["invoice_id"]}')],
-                [InlineKeyboardButton("Назад", callback_data='back_to_start')]
+                [InlineKeyboardButton("💳 Перейти к оплате", url=invoice['pay_url'])],
+                [InlineKeyboardButton("✅ Проверить оплату", callback_data=f'check_{invoice["invoice_id"]}')],
+                [InlineKeyboardButton("◀️ Назад", callback_data='back_to_start')]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             query.edit_message_text(
@@ -802,39 +806,78 @@ def button_callback(update: Update, context: CallbackContext):
         status = check_payment_status(invoice_id)
         
         if status == 'paid':
-            process_payment(user_id, invoice_id, context)
+            # Проверяем не был ли уже оплачен
+            conn = get_db_connection()
+            c = conn.cursor()
+            c.execute("SELECT paid_status FROM users WHERE user_id = %s", (user_id,))
+            paid_status = c.fetchone()
+            conn.close()
             
-            keyboard = [
-                [InlineKeyboardButton("Профиль", callback_data='profile')],
-                [
-                    InlineKeyboardButton("Реферальная ссылка", callback_data='referral'),
-                    InlineKeyboardButton("Вывести", callback_data='withdraw')
+            if paid_status and paid_status[0] == 1:
+                # Уже оплатил - просто показываем меню
+                keyboard = [
+                    [InlineKeyboardButton("Профиль", callback_data='profile')],
+                    [
+                        InlineKeyboardButton("Реферальная ссылка", callback_data='referral'),
+                        InlineKeyboardButton("Вывести", callback_data='withdraw')
+                    ]
                 ]
-            ]
-            
-            if is_admin(user_id):
-                keyboard.append([InlineKeyboardButton("Админ панель", callback_data='admin_panel')])
-            
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            text = (
-                "*🔮 Galaxy - безграничная вселенная возможностей!*\n\n"
-                "• В данном сервисе приглашайте рефералов и получайте за это деньги!"
-            )
-            
-            query.edit_message_text(
-                text,
-                reply_markup=reply_markup,
-                parse_mode='Markdown'
-            )
+                if is_admin(user_id):
+                    keyboard.append([InlineKeyboardButton("Админ панель", callback_data='admin_panel')])
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                query.edit_message_text(
+                    "✅ Вы уже оплатили!",
+                    reply_markup=reply_markup
+                )
+            else:
+                # Начисляем бонусы
+                process_payment(user_id, invoice_id, context)
+                
+                keyboard = [
+                    [InlineKeyboardButton("Профиль", callback_data='profile')],
+                    [
+                        InlineKeyboardButton("Реферальная ссылка", callback_data='referral'),
+                        InlineKeyboardButton("Вывести", callback_data='withdraw')
+                    ]
+                ]
+                if is_admin(user_id):
+                    keyboard.append([InlineKeyboardButton("Админ панель", callback_data='admin_panel')])
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                text = (
+                    "*🔮 Galaxy - безграничная вселенная возможностей!*\n\n"
+                    "• В данном сервисе приглашайте рефералов и получайте за это деньги!"
+                )
+                
+                query.edit_message_text(
+                    text,
+                    reply_markup=reply_markup,
+                    parse_mode='Markdown'
+                )
         else:
+            # Возвращаем к созданию счета, а не в начало
             keyboard = [
-                [InlineKeyboardButton("Проверить снова", callback_data=f'check_{invoice_id}')],
-                [InlineKeyboardButton("Назад", callback_data='back_to_start')]
+                [InlineKeyboardButton("🔄 Проверить снова", callback_data=f'check_{invoice_id}')],
+                [InlineKeyboardButton("◀️ Назад к счету", callback_data='back_to_invoice')]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             query.edit_message_text(
                 "⏳ Платеж еще не найден.\n\nУбедитесь что вы оплатили и нажмите 'Проверить снова'",
+                reply_markup=reply_markup
+            )
+    
+    elif query.data == 'back_to_invoice':
+        # Возвращаем к созданию счета
+        invoice = create_crypto_invoice(user_id, 5)
+        if invoice:
+            keyboard = [
+                [InlineKeyboardButton("💳 Перейти к оплате", url=invoice['pay_url'])],
+                [InlineKeyboardButton("✅ Проверить оплату", callback_data=f'check_{invoice["invoice_id"]}')],
+                [InlineKeyboardButton("◀️ Назад", callback_data='back_to_start')]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            query.edit_message_text(
+                "💰 Счет на 5 USDT создан!\n\n1. Оплати в @CryptoBot\n2. Нажми 'Проверить'",
                 reply_markup=reply_markup
             )
     
@@ -934,7 +977,5 @@ def main():
     updater.idle()
 
 if __name__ == '__main__':
-    # Сначала инициализируем БД
     init_db()
-    # Потом запускаем бота
     main()
