@@ -1,28 +1,19 @@
 # ==== ПРИНУДИТЕЛЬНАЯ УСТАНОВКА ====
+# ==== ПРИНУДИТЕЛЬНАЯ УСТАНОВКА ====
 import subprocess
 import sys
 
-print("🚀 Устанавливаю нужные пакеты...")
+print("🚀 Устанавливаю пакеты из requirements.txt...")
 
-# Сначала setuptools (нужен для pkg_resources)
-subprocess.check_call([sys.executable, "-m", "pip", "install", "setuptools"])
+# Переустанавливаем всё из requirements.txt
+subprocess.check_call([sys.executable, "-m", "pip", "install", "--upgrade", "--force-reinstall", "-r", "requirements.txt"])
 
-# Потом telegram-bot
-subprocess.check_call([sys.executable, "-m", "pip", "install", "--force-reinstall", "python-telegram-bot==13.15"])
-
-# Теперь импортируем и проверяем
+# Проверяем версию
 import telegram
-print(f"✅ Установлена версия: {telegram.__version__}")
-
-if telegram.__version__ != "13.15":
-    raise Exception(f"❌ Ошибка версии")
+print(f"✅ Установлена версия telegram-bot: {telegram.__version__}")
 # ===================================
 
-# Теперь импортируем всё остальн
-
-# ... остальной код
-
-import logging
+# Теперь импортируем всё остальное
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, MessageHandler, Filters, CallbackContext
 import psycopg2
@@ -33,7 +24,9 @@ import random
 import string
 import time
 from datetime import datetime
+import logging
 
+# ... дальше твой код
 # ========== НАСТРОЙКА ==========
 BOT_TOKEN = os.environ['BOT_TOKEN']
 CRYPTOBOT_TOKEN = os.environ['CRYPTOBOT_TOKEN']  # Токен от @CryptoBot
