@@ -10,6 +10,9 @@ import string
 import time
 from datetime import datetime
 
+import telegram
+print(f"Версия telegram: {telegram.__version__}")
+
 # ========== НАСТРОЙКА ==========
 BOT_TOKEN = os.environ['BOT_TOKEN']
 CRYPTOBOT_TOKEN = os.environ['CRYPTOBOT_TOKEN']  # Токен от @CryptoBot
