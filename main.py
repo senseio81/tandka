@@ -386,7 +386,8 @@ def start(update: Update, context: CallbackContext):
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         text = (
-            "*🔮Galaxy - галактика* [переходник ворка](https://t.me/Galaxy_vork)\n\n"
+            "*🔮Galaxy - галактика ворка*\n\n"
+            "[переходник ворка](https://t.me/Galaxy_vork)\n\n"
             "• В этом боте вы получаете деньги за приглашённых пользователей по вашей реферальной ссылке и ссылке ваших рефералов 💥"
         )
         
@@ -757,7 +758,8 @@ def button_callback(update: Update, context: CallbackContext):
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 
                 text = (
-                    "*🔮Galaxy - галактика* [переходник ворка](https://t.me/Galaxy_vork)\n\n"
+                    "*🔮Galaxy - галактика ворка*\n\n"
+                    "[переходник ворка](https://t.me/Galaxy_vork)\n\n"
                     "• В этом боте вы получаете деньги за приглашённых пользователей по вашей реферальной ссылке и ссылке ваших рефералов 💥"
                 )
                 
@@ -839,7 +841,8 @@ def button_callback(update: Update, context: CallbackContext):
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         text = (
-            "*🔮Galaxy - галактика* [переходник ворка](https://t.me/Galaxy_vork)\n\n"
+            "*🔮Galaxy - галактика ворка*\n\n"
+            "[переходник ворка](https://t.me/Galaxy_vork)\n\n"
             "• В этом боте вы получаете деньги за приглашённых пользователей по вашей реферальной ссылке и ссылке ваших рефералов 💥"
         )
         
@@ -861,7 +864,8 @@ def button_callback(update: Update, context: CallbackContext):
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             text = (
-                "*🔮Galaxy - галактика* [переходник ворка](https://t.me/Galaxy_vork)\n\n"
+                "*🔮Galaxy - галактика ворка*\n\n"
+                "[переходник ворка](https://t.me/Galaxy_vork)\n\n"
                 "• В этом боте вы получаете деньги за приглашённых пользователей по вашей реферальной ссылке и ссылке ваших рефералов 💥"
             )
             query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown', disable_web_page_preview=True)
