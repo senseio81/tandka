@@ -1,5 +1,6 @@
 # ==== ПРИНУДИТЕЛЬНАЯ УСТАНОВКА ====
 # ==== ЖЕСТКАЯ ПРИНУДИТЕЛЬНАЯ УСТАНОВКА ====
+# ==== ПРИНУДИТЕЛЬНАЯ УСТАНОВКА ====
 import subprocess
 import sys
 import os
@@ -20,7 +21,6 @@ subprocess.check_call([sys.executable, "-m", "pip", "install", "requests==2.31.0
 subprocess.check_call([sys.executable, "-m", "pip", "install", "Flask==2.3.3"])
 
 print("✅ Пакеты установлены")
-# ===========================================
 # ===================================
 
 # Теперь импортируем
@@ -388,14 +388,15 @@ def start(update: Update, context: CallbackContext):
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         text = (
-            "*🔮 Galaxy - безграничная вселенная возможностей!*\n\n"
-            "• В данном сервисе приглашайте рефералов и получайте за это деньги!"
+            "*🔮Galaxy - галактика [переходник ворка](https://t.me/Galaxy_vork)*\n\n"
+            "• В этом боте вы получаете деньги за приглашённых пользователей по вашей реферальной ссылке и ссылке ваших рефералов 💥"
         )
         
         update.message.reply_text(
             text,
             reply_markup=reply_markup,
-            parse_mode='Markdown'
+            parse_mode='Markdown',
+            disable_web_page_preview=True
         )
 
 # ========== АДМИН ПАНЕЛЬ ==========
@@ -758,14 +759,15 @@ def button_callback(update: Update, context: CallbackContext):
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 
                 text = (
-                    "*🔮 Galaxy - безграничная вселенная возможностей!*\n\n"
-                    "• В данном сервисе приглашайте рефералов и получайте за это деньги!"
+                    "*🔮Galaxy - галактика [переходник ворка](https://t.me/Galaxy_vork)*\n\n"
+                    "• В этом боте вы получаете деньги за приглашённых пользователей по вашей реферальной ссылке и ссылке ваших рефералов 💥"
                 )
                 
                 query.edit_message_text(
                     text,
                     reply_markup=reply_markup,
-                    parse_mode='Markdown'
+                    parse_mode='Markdown',
+                    disable_web_page_preview=True
                 )
         else:
             # Возвращаем к созданию счета, а не в начало
@@ -839,14 +841,15 @@ def button_callback(update: Update, context: CallbackContext):
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         text = (
-            "*🔮 Galaxy - безграничная вселенная возможностей!*\n\n"
-            "• В данном сервисе приглашайте рефералов и получайте за это деньги!"
+            "*🔮Galaxy - галактика [переходник ворка](https://t.me/Galaxy_vork)*\n\n"
+            "• В этом боте вы получаете деньги за приглашённых пользователей по вашей реферальной ссылке и ссылке ваших рефералов 💥"
         )
         
         query.edit_message_text(
             text,
             reply_markup=reply_markup,
-            parse_mode='Markdown'
+            parse_mode='Markdown',
+            disable_web_page_preview=True
         )
     elif query.data == 'back_to_start':
         if is_admin(user_id):
@@ -860,10 +863,10 @@ def button_callback(update: Update, context: CallbackContext):
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             text = (
-                "*🔮 Galaxy - безграничная вселенная возможностей!*\n\n"
-                "• В данном сервисе приглашайте рефералов и получайте за это деньги!"
+                "*🔮Galaxy - галактика [переходник ворка](https://t.me/Galaxy_vork)*\n\n"
+                "• В этом боте вы получаете деньги за приглашённых пользователей по вашей реферальной ссылке и ссылке ваших рефералов 💥"
             )
-            query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+            query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown', disable_web_page_preview=True)
         else:
             keyboard = [[InlineKeyboardButton("💳 Оплатить 5 USDT", callback_data='pay')]]
             reply_markup = InlineKeyboardMarkup(keyboard)
